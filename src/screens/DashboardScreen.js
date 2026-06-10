@@ -1,13 +1,15 @@
 import { ArrowDownCircle, ArrowUpCircle, Wallet } from "lucide-react-native";
 import { useCallback, useContext, useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Dimensions,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Dimensions,
+  Image,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { BarChart } from "react-native-chart-kit";
 import apiClient from "../api/apiClient";
@@ -22,7 +24,7 @@ import { AuthContext } from "../context/AuthContext";
 // Ekran genişliğini alıyoruz (Grafik için lazım)
 const screenWidth = Dimensions.get("window").width;
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ navigation }) {
   const { currentUser } = useContext(AuthContext);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -128,15 +130,39 @@ export default function DashboardScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* Karşılama Başlığı ve İnteraktif Saat (Yan Yana) */}
+        {/* Karşılama Başlığı ve İnteraktif Saat (Yan Yana) */}
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.greeting}>Merhaba,</Text>
-            <Text style={styles.username}>
-              {currentUser?.username
-                ? currentUser.username.toUpperCase()
-                : "KULLANICI"}
-            </Text>
-          </View>
+          {/* SOL ÜST: Profil Resmi ve İsim (Tıklanabilir) */}
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => navigation.navigate("Profile")}
+            activeOpacity={0.7}
+          >
+            {/* Profil Fotoğrafı veya Baş Harfler */}
+            {currentUser?.profilePhoto ? (
+              <Image
+                source={{ uri: currentUser.profilePhoto }}
+                style={styles.avatarImage}
+              />
+            ) : (
+              <View style={styles.avatarFallback}>
+                <Text style={styles.avatarText}>
+                  {currentUser?.username
+                    ? currentUser.username.substring(0, 2).toUpperCase()
+                    : "U"}
+                </Text>
+              </View>
+            )}
+
+            <View>
+              <Text style={styles.greeting}>Merhaba,</Text>
+              <Text style={styles.username}>
+                {currentUser?.username
+                  ? currentUser.username.toUpperCase()
+                  : "KULLANICI"}
+              </Text>
+            </View>
+          </TouchableOpacity>
 
           {/* SAAT BİLEŞENİ BURADA */}
           <InteractiveClock />
@@ -338,4 +364,21 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     alignSelf: "flex-start",
   },
+  // styles objesinin içine bunları ekle
+  profileButton: { flexDirection: "row", alignItems: "center", gap: 12 },
+  avatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#4f46e5",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  avatarText: { color: "#ffffff", fontSize: 18, fontWeight: "900" },
+  avatarImage: { width: 44, height: 44, borderRadius: 22 },
 });

@@ -1,23 +1,27 @@
 import {
   ArrowDownCircle,
   ArrowUpCircle,
+  Calendar,
   Check,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
+  Copy,
   Edit2,
+  ListOrdered,
   Plus,
   Trash2,
   X,
 } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,50 +29,54 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import apiClient from "../api/apiClient";
+import { AuthContext } from "../context/AuthContext";
 
 const MONTHS = [
-  "Ocak",
-  "Şubat",
-  "Mart",
-  "Nisan",
-  "Mayıs",
-  "Haziran",
-  "Temmuz",
-  "Ağustos",
-  "Eylül",
-  "Ekim",
-  "Kasım",
-  "Aralık",
+  { value: "01", label: "Ocak" },
+  { value: "02", label: "Şubat" },
+  { value: "03", label: "Mart" },
+  { value: "04", label: "Nisan" },
+  { value: "05", label: "Mayıs" },
+  { value: "06", label: "Haziran" },
+  { value: "07", label: "Temmuz" },
+  { value: "08", label: "Ağustos" },
+  { value: "09", label: "Eylül" },
+  { value: "10", label: "Ekim" },
+  { value: "11", label: "Kasım" },
+  { value: "12", label: "Aralık" },
 ];
 
-export default function ListScreen() {
+const currentYear = new Date().getFullYear();
+const YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 3 + i));
+
+export default function ListScreen({ navigation }) {
+  const { currentUser } = useContext(AuthContext);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCopying, setIsCopying] = useState(false);
+
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
 
-  // Tarih State'leri
-  const now = new Date();
-  const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
-  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(
+    String(new Date().getMonth() + 1).padStart(2, "0"),
+  );
+  const [selectedYear, setSelectedYear] = useState(String(currentYear));
 
-  // Form State'leri
-  const [isModalVisible, setIsModalVisible] = useState(false);
+  // Modallar
+  const [isYearModalOpen, setIsYearModalOpen] = useState(false);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [formData, setFormData] = useState({
     id: null,
     type: "GİDER",
     categoryId: "",
-    date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
+    date: "",
     amount: "",
     description: "",
   });
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat("tr-TR", {
-      style: "currency",
-      currency: "TRY",
-    }).format(amount);
-  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -90,185 +98,179 @@ export default function ListScreen() {
     fetchData();
   }, [fetchData]);
 
-  const handlePrevMonth = () => {
-    if (selectedMonth === 0) {
-      setSelectedMonth(11);
-      setSelectedYear(selectedYear - 1);
-    } else {
-      setSelectedMonth(selectedMonth - 1);
+  // --- FİLTRELEME VE HESAPLAMA ---
+  const currentMonthTransactions = useMemo(() => {
+    return transactions
+      .filter((t) => {
+        if (!t.date) return false;
+        const [tYear, tMonth] = t.date.split("-");
+        return tMonth === selectedMonth && tYear === selectedYear;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [transactions, selectedMonth, selectedYear]);
+
+  // --- GEÇEN AYDAN AKTARMA MANTIĞI ---
+  const { prevMonthStr, prevYearStr } = useMemo(() => {
+    let m = parseInt(selectedMonth) - 1;
+    let y = parseInt(selectedYear);
+    if (m < 1) {
+      m = 12;
+      y -= 1;
+    }
+    return { prevMonthStr: String(m).padStart(2, "0"), prevYearStr: String(y) };
+  }, [selectedMonth, selectedYear]);
+
+  const previousMonthTransactions = useMemo(() => {
+    return transactions.filter((t) => {
+      if (!t.date) return false;
+      const [tYear, tMonth] = t.date.split("-");
+      return tMonth === prevMonthStr && tYear === prevYearStr;
+    });
+  }, [transactions, prevMonthStr, prevYearStr]);
+
+  const canCopyFromPreviousMonth =
+    currentMonthTransactions.length === 0 &&
+    previousMonthTransactions.length > 0;
+
+  const handleCopyFromPreviousMonth = () => {
+    const currentMonthLabel = MONTHS.find(
+      (m) => m.value === selectedMonth,
+    )?.label;
+    Alert.alert(
+      "Kayıtları Aktar",
+      `Önceki aya ait ${previousMonthTransactions.length} adet kayıt bu aya (${currentMonthLabel} ${selectedYear}) kopyalanacak. Onaylıyor musunuz?`,
+      [
+        { text: "İptal", style: "cancel" },
+        {
+          text: "Aktar",
+          style: "default",
+          onPress: async () => {
+            setIsCopying(true);
+            try {
+              const newTransactions = previousMonthTransactions.map((t) => {
+                const parts = t.date.split("-");
+                let dayStr = parts[2] || "01";
+                const maxDaysInTargetMonth = new Date(
+                  parseInt(selectedYear),
+                  parseInt(selectedMonth),
+                  0,
+                ).getDate();
+                const adjustedDay = Math.min(
+                  parseInt(dayStr, 10),
+                  maxDaysInTargetMonth,
+                );
+                return {
+                  categoryId: t.categoryId,
+                  categoryName: t.categoryName,
+                  amount: t.amount,
+                  description: t.description,
+                  type: t.type,
+                  date: `${selectedYear}-${selectedMonth}-${String(adjustedDay).padStart(2, "0")}`,
+                };
+              });
+              await apiClient.post("/api/transaction", newTransactions);
+              Alert.alert(
+                "Başarılı",
+                `${newTransactions.length} kayıt başarıyla aktarıldı!`,
+              );
+              fetchData();
+            } catch (error) {
+              Alert.alert("Hata", "Kayıtlar kopyalanırken hata oluştu.");
+            } finally {
+              setIsCopying(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // --- FORM İŞLEMLERİ (EKLE/DÜZENLE) ---
+  const openForm = (t = null) => {
+    setFormData(
+      t
+        ? {
+            id: t._id || t.id,
+            type: t.type,
+            categoryId: t.categoryId,
+            date: t.date,
+            amount: String(t.amount),
+            description: t.description || "",
+          }
+        : {
+            id: null,
+            type: "GİDER",
+            categoryId: "",
+            date: `${selectedYear}-${selectedMonth}-01`,
+            amount: "",
+            description: "",
+          },
+    );
+    setIsFormOpen(true);
+  };
+
+  const handleTransactionSubmit = async () => {
+    if (!formData.categoryId)
+      return Alert.alert("Uyarı", "Lütfen bir kategori seçin.");
+    if (!formData.date || !formData.amount)
+      return Alert.alert("Uyarı", "Tarih ve Tutar zorunludur.");
+
+    setIsSubmitting(true);
+    try {
+      const selectedCat = categories.find(
+        (c) => String(c._id || c.id) === String(formData.categoryId),
+      );
+      const payload = {
+        ...formData,
+        amount: parseFloat(formData.amount.replace(",", ".")),
+        categoryName: selectedCat ? selectedCat.name : formData.categoryId,
+      };
+
+      const response = await apiClient.post("/api/transaction", payload);
+
+      Alert.alert(
+        "Başarılı",
+        formData.id ? "Kayıt güncellendi!" : "Kayıt eklendi!",
+      );
+      setIsFormOpen(false);
+      fetchData(); // Listeyi yenile
+    } catch (error) {
+      Alert.alert("Hata", "İşlem sırasında bir hata oluştu.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleNextMonth = () => {
-    if (selectedMonth === 11) {
-      setSelectedMonth(0);
-      setSelectedYear(selectedYear + 1);
-    } else {
-      setSelectedMonth(selectedMonth + 1);
-    }
-  };
-
-  const currentMonthStr = String(selectedMonth + 1).padStart(2, "0");
-  const targetYearMonth = `${selectedYear}-${currentMonthStr}`;
-
-  const currentMonthTransactions = transactions
-    .filter((t) => t.date && t.date.substring(0, 7) === targetYearMonth)
-    .sort((a, b) => b.date.localeCompare(a.date));
-
-  const handleDelete = (id) => {
-    Alert.alert("Emin misiniz?", "Bu kaydı silmek istediğinize emin misiniz?", [
+  const handleDeleteTransaction = (id) => {
+    Alert.alert("Kaydı Sil", "Bu işlemi silmek istediğinize emin misiniz?", [
       { text: "İptal", style: "cancel" },
       {
         text: "Sil",
         style: "destructive",
         onPress: async () => {
+          const prev = [...transactions];
+          setTransactions(
+            transactions.filter((t) => String(t._id || t.id) !== String(id)),
+          );
           try {
             await apiClient.delete(`/api/transaction?id=${id}`);
-            setTransactions(transactions.filter((t) => (t._id || t.id) !== id));
-          } catch (error) {
-            Alert.alert("Hata", "Kayıt silinemedi.");
+          } catch (err) {
+            setTransactions(prev);
+            Alert.alert("Hata", "Silme işlemi başarısız.");
           }
         },
       },
     ]);
   };
 
-  // --- FORM İŞLEMLERİ ---
-  const openForm = (item = null) => {
-    if (item) {
-      setFormData({
-        id: item._id || item.id,
-        type: item.type,
-        categoryId: item.categoryId,
-        date: item.date,
-        amount: String(item.amount),
-        description: item.description || "",
-      });
-    } else {
-      setFormData({
-        id: null,
-        type: "GİDER",
-        categoryId: "",
-        date: `${targetYearMonth}-01`,
-        amount: "",
-        description: "",
-      });
-    }
-    setIsModalVisible(true);
-  };
-
-  const handleSaveTransaction = async () => {
-    if (!formData.categoryId || !formData.amount || !formData.date) {
-      Alert.alert(
-        "Uyarı",
-        "Lütfen Kategori, Tarih ve Tutar alanlarını doldurun.",
-      );
-      return;
-    }
-
-    const selectedCat = categories.find(
-      (c) => String(c._id || c.id) === String(formData.categoryId),
-    );
-    const payload = {
-      ...formData,
-      categoryName: selectedCat ? selectedCat.name : formData.categoryId,
-      amount: parseFloat(formData.amount.replace(",", ".")),
-    };
-
-    try {
-      const response = await apiClient.post("/api/transaction", payload);
-      const savedTransaction = response.data;
-      savedTransaction.categoryName = payload.categoryName;
-
-      if (formData.id) {
-        setTransactions(
-          transactions.map((t) =>
-            String(t._id || t.id) === String(formData.id)
-              ? savedTransaction
-              : t,
-          ),
-        );
-      } else {
-        setTransactions([...transactions, savedTransaction]);
-      }
-      setIsModalVisible(false);
-    } catch (error) {
-      Alert.alert("Hata", "Kayıt kaydedilemedi.");
-    }
-  };
-
+  const formatCurrency = (amount) =>
+    new Intl.NumberFormat("tr-TR", {
+      style: "currency",
+      currency: "TRY",
+    }).format(amount);
   const currentTypeCategories = categories.filter(
     (c) => c.type === formData.type,
   );
-
-  // --- RENDER SATIRI ---
-  const renderTransactionItem = ({ item }) => {
-    const isIncome = item.type === "GELİR";
-    const category = categories.find(
-      (c) => String(c._id || c.id) === String(item.categoryId),
-    );
-    const displayCategoryName = category
-      ? category.name
-      : item.categoryName || "SİLİNMİŞ";
-
-    return (
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View
-            style={[
-              styles.badge,
-              isIncome ? styles.badgeIncome : styles.badgeExpense,
-            ]}
-          >
-            <Text
-              style={[
-                styles.badgeText,
-                isIncome ? styles.textIncome : styles.textExpense,
-              ]}
-            >
-              {displayCategoryName}
-            </Text>
-          </View>
-          <Text
-            style={[
-              styles.amount,
-              isIncome ? styles.textIncome : styles.textExpense,
-            ]}
-          >
-            {isIncome ? "+" : "-"}
-            {formatCurrency(item.amount)}
-          </Text>
-        </View>
-        <View>
-          <Text style={styles.dateText}>
-            {item.date.split("-").reverse().join(".")}
-          </Text>
-          {item.description ? (
-            <Text style={styles.descriptionText} numberOfLines={2}>
-              {item.description}
-            </Text>
-          ) : null}
-        </View>
-
-        <View style={styles.actionButtons}>
-          {" "}
-          {/* <--- ÇİFT << İŞARETİ TEKE DÜŞTÜ */}
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => openForm(item)}
-          >
-            <Edit2 size={18} color="#64748b" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => handleDelete(item._id || item.id)}
-          >
-            <Trash2 size={18} color="#dc2626" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
 
   if (isLoading) {
     return (
@@ -281,50 +283,216 @@ export default function ListScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={handlePrevMonth} style={styles.navButton}>
-          <ChevronLeft size={24} color="#1e293b" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>
-          {MONTHS[selectedMonth]} {selectedYear}
-        </Text>
-        <TouchableOpacity onPress={handleNextMonth} style={styles.navButton}>
-          <ChevronRight size={24} color="#1e293b" />
-        </TouchableOpacity>
+        <ListOrdered size={28} color="#4f46e5" />
+        <Text style={styles.headerTitle}>İşlem Kayıtları</Text>
       </View>
 
-      {currentMonthTransactions.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>Bu döneme ait kayıt bulunamadı.</Text>
+      {/* FİLTRE KARTI (Yıl Combobox ve Ay Seçici) */}
+      <View style={styles.filterCard}>
+        <View style={styles.filterRow}>
+          <Calendar size={20} color="#64748b" />
+
+          {/* Yıl Combobox Butonu */}
+          <TouchableOpacity
+            onPress={() => setIsYearModalOpen(true)}
+            style={styles.yearDropdown}
+          >
+            <Text style={styles.yearDropdownText}>{selectedYear}</Text>
+            <ChevronDown size={16} color="#64748b" />
+          </TouchableOpacity>
         </View>
-      ) : (
-        <FlatList
-          data={currentMonthTransactions}
-          keyExtractor={(item) => String(item._id || item.id || Math.random())}
-          renderItem={renderTransactionItem}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
+
+        {/* Aylar Scroll */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.monthsScroll}
+        >
+          {MONTHS.map((m) => (
+            <TouchableOpacity
+              key={m.value}
+              onPress={() => setSelectedMonth(m.value)}
+              style={[
+                styles.monthChip,
+                selectedMonth === m.value && styles.monthChipActive,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.monthText,
+                  selectedMonth === m.value && styles.monthTextActive,
+                ]}
+              >
+                {m.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* GEÇEN AYDAN AKTAR BUTONU */}
+      {canCopyFromPreviousMonth && currentUser?.role === "admin" && (
+        <TouchableOpacity
+          style={styles.copyButton}
+          onPress={handleCopyFromPreviousMonth}
+          disabled={isCopying}
+        >
+          {isCopying ? (
+            <ActivityIndicator color="#ffffff" size="small" />
+          ) : (
+            <Copy size={18} color="#ffffff" />
+          )}
+          <Text style={styles.copyButtonText}>
+            {isCopying ? "Aktarılıyor..." : "Geçen Aydan Kayıtları Aktar"}
+          </Text>
+        </TouchableOpacity>
       )}
 
-      {/* FAB BUTONU EKLENDİ */}
-      <TouchableOpacity style={styles.fab} onPress={() => openForm()}>
-        <Plus size={28} color="#ffffff" />
-      </TouchableOpacity>
+      {/* LİSTE */}
+      <ScrollView
+        contentContainerStyle={styles.listContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {currentMonthTransactions.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIconCircle}>
+              <ListOrdered size={32} color="#94a3b8" />
+            </View>
+            <Text style={styles.emptyTitle}>Kayıt Bulunamadı</Text>
+            <Text style={styles.emptyDesc}>
+              Bu döneme ait henüz bir işlem yapmadınız.
+            </Text>
+          </View>
+        ) : (
+          currentMonthTransactions.map((t) => {
+            const cat = categories.find(
+              (c) => String(c._id || c.id) === String(t.categoryId),
+            );
+            const categoryName = cat
+              ? cat.name
+              : t.categoryName || "Bilinmeyen";
 
-      {/* MODAL (FORM) EKRANI */}
-      <Modal visible={isModalVisible} animationType="slide" transparent={true}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+            return (
+              <View key={t._id || t.id} style={styles.transactionCard}>
+                <View style={styles.tHeader}>
+                  <View
+                    style={[
+                      styles.tBadge,
+                      t.type === "GELİR"
+                        ? styles.bgGreenLight
+                        : styles.bgRedLight,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.tBadgeText,
+                        t.type === "GELİR" ? styles.textGreen : styles.textRed,
+                      ]}
+                    >
+                      {categoryName}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.tAmount,
+                      t.type === "GELİR" ? styles.textGreen : styles.textRed,
+                    ]}
+                  >
+                    {t.type === "GELİR" ? "+" : "-"}
+                    {formatCurrency(t.amount)}
+                  </Text>
+                </View>
+
+                <View style={styles.tBody}>
+                  <Text style={styles.tDate}>
+                    {t.date.split("-").reverse().join(".")}
+                  </Text>
+                  {t.description ? (
+                    <Text style={styles.tDesc} numberOfLines={1}>
+                      {t.description}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {currentUser?.role === "admin" && (
+                  <View style={styles.tActions}>
+                    <TouchableOpacity
+                      onPress={() => openForm(t)}
+                      style={[
+                        styles.actionBtn,
+                        { backgroundColor: "#e0e7ff", marginRight: 8 },
+                      ]}
+                    >
+                      <Edit2 size={16} color="#4f46e5" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => handleDeleteTransaction(t._id || t.id)}
+                      style={styles.actionBtn}
+                    >
+                      <Trash2 size={16} color="#ef4444" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            );
+          })
+        )}
+      </ScrollView>
+
+      {/* FAB: YENİ KAYIT EKLE BUTONU (Sağ Alt Köşe) */}
+      {currentUser?.role === "admin" && (
+        <TouchableOpacity style={styles.fab} onPress={() => openForm()}>
+          <Plus size={28} color="#ffffff" />
+        </TouchableOpacity>
+      )}
+
+      {/* MODAL: YIL COMBOBOX */}
+      <Modal visible={isYearModalOpen} transparent={true} animationType="fade">
+        <TouchableOpacity
           style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsYearModalOpen(false)}
         >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
+          <View style={styles.yearModalContent}>
+            <Text style={styles.modalTitle}>Yıl Seçiniz</Text>
+            {YEARS.map((y) => (
+              <TouchableOpacity
+                key={y}
+                style={[
+                  styles.yearModalItem,
+                  selectedYear === y && styles.yearModalItemActive,
+                ]}
+                onPress={() => {
+                  setSelectedYear(y);
+                  setIsYearModalOpen(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.yearModalText,
+                    selectedYear === y && styles.yearModalTextActive,
+                  ]}
+                >
+                  {y}
+                </Text>
+                {selectedYear === y && <Check size={18} color="#4f46e5" />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* MODAL: YENİ KAYIT / DÜZENLE FORM */}
+      <Modal visible={isFormOpen} transparent={true} animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.formModalContent}>
+            <View style={styles.modalHeaderRow}>
               <Text style={styles.modalTitle}>
-                {formData.id ? "Kaydı Düzenle" : "Yeni Kayıt Ekle"}
+                {formData.id ? "Kaydı Düzenle" : "Yeni Kayıt"}
               </Text>
               <TouchableOpacity
-                onPress={() => setIsModalVisible(false)}
-                style={styles.closeButton}
+                onPress={() => setIsFormOpen(false)}
+                style={styles.closeBtn}
               >
                 <X size={20} color="#64748b" />
               </TouchableOpacity>
@@ -332,14 +500,13 @@ export default function ListScreen() {
 
             <ScrollView
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ paddingBottom: 20 }}
+              style={{ maxHeight: "85%" }}
             >
-              {/* Gelir / Gider Butonları */}
               <View style={styles.typeSelector}>
                 <TouchableOpacity
                   style={[
                     styles.typeBtn,
-                    formData.type === "GİDER" && styles.typeBtnExpenseActive,
+                    formData.type === "GİDER" && styles.typeBtnExpense,
                   ]}
                   onPress={() =>
                     setFormData({ ...formData, type: "GİDER", categoryId: "" })
@@ -361,7 +528,7 @@ export default function ListScreen() {
                 <TouchableOpacity
                   style={[
                     styles.typeBtn,
-                    formData.type === "GELİR" && styles.typeBtnIncomeActive,
+                    formData.type === "GELİR" && styles.typeBtnIncome,
                   ]}
                   onPress={() =>
                     setFormData({ ...formData, type: "GELİR", categoryId: "" })
@@ -382,19 +549,17 @@ export default function ListScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Kategoriler (Yatay Scroll) */}
               <Text style={styles.inputLabel}>Kategori</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.categoryScroll}
-              >
+              <View style={styles.chipContainer}>
                 {currentTypeCategories.map((c) => {
                   const isSelected =
                     String(formData.categoryId) === String(c._id || c.id);
                   return (
                     <TouchableOpacity
                       key={c._id || c.id}
+                      onPress={() =>
+                        setFormData({ ...formData, categoryId: c._id || c.id })
+                      }
                       style={[
                         styles.catChip,
                         isSelected &&
@@ -402,15 +567,12 @@ export default function ListScreen() {
                             ? styles.catChipIncome
                             : styles.catChipExpense),
                       ]}
-                      onPress={() =>
-                        setFormData({ ...formData, categoryId: c._id || c.id })
-                      }
                     >
                       {isSelected && (
                         <Check
                           size={14}
                           color={
-                            formData.type === "GELİR" ? "#15803d" : "#b91c1c"
+                            formData.type === "GELİR" ? "#16a34a" : "#dc2626"
                           }
                         />
                       )}
@@ -419,8 +581,8 @@ export default function ListScreen() {
                           styles.catChipText,
                           isSelected &&
                             (formData.type === "GELİR"
-                              ? { color: "#15803d" }
-                              : { color: "#b91c1c" }),
+                              ? styles.textGreen
+                              : styles.textRed),
                         ]}
                       >
                         {c.name}
@@ -428,15 +590,16 @@ export default function ListScreen() {
                     </TouchableOpacity>
                   );
                 })}
-              </ScrollView>
+              </View>
 
-              {/* Tarih, Tutar, Açıklama */}
               <Text style={styles.inputLabel}>Tarih (YYYY-AA-GG)</Text>
               <TextInput
                 style={styles.input}
                 value={formData.date}
                 onChangeText={(t) => setFormData({ ...formData, date: t })}
-                placeholder="2026-06-01"
+                placeholder="2026-06-15"
+                placeholderTextColor="#94a3b8"
+                maxLength={10}
               />
 
               <Text style={styles.inputLabel}>Tutar (₺)</Text>
@@ -444,31 +607,37 @@ export default function ListScreen() {
                 style={styles.input}
                 value={formData.amount}
                 onChangeText={(t) => setFormData({ ...formData, amount: t })}
-                keyboardType="decimal-pad"
                 placeholder="0.00"
+                keyboardType="numeric"
+                placeholderTextColor="#94a3b8"
               />
 
-              <Text style={styles.inputLabel}>Açıklama</Text>
+              <Text style={styles.inputLabel}>Açıklama (İsteğe bağlı)</Text>
               <TextInput
-                style={[styles.input, { height: 80 }]}
+                style={[styles.input, { height: 80, textAlignVertical: "top" }]}
                 value={formData.description}
+                multiline={true}
                 onChangeText={(t) =>
                   setFormData({ ...formData, description: t })
                 }
-                multiline
-                placeholder="İsteğe bağlı..."
+                placeholder="Notunuz..."
+                placeholderTextColor="#94a3b8"
               />
 
-              {/* Kaydet Butonu */}
               <TouchableOpacity
-                style={styles.saveButton}
-                onPress={handleSaveTransaction}
+                style={styles.submitButton}
+                onPress={handleTransactionSubmit}
+                disabled={isSubmitting}
               >
-                <Text style={styles.saveButtonText}>Kaydet</Text>
+                {isSubmitting ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Kaydet</Text>
+                )}
               </TouchableOpacity>
             </ScrollView>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -476,87 +645,154 @@ export default function ListScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#f8fafc" },
-  centerContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#f8fafc",
-  },
+  centerContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 12,
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 20,
+    paddingBottom: 16,
+  },
+  headerTitle: { fontSize: 24, fontWeight: "900", color: "#1e293b" },
+
+  // Yıl ve Ay Seçici
+  filterCard: {
     backgroundColor: "#ffffff",
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
+    paddingBottom: 12,
+    marginBottom: 12,
   },
-  headerTitle: { fontSize: 18, fontWeight: "900", color: "#1e293b" },
-  navButton: { padding: 8, backgroundColor: "#f1f5f9", borderRadius: 12 },
-  listContent: { padding: 16, paddingBottom: 100 },
-  card: {
+  yearDropdown: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  yearDropdownText: { fontSize: 16, fontWeight: "900", color: "#1e293b" },
+  monthsScroll: { flexGrow: 0 },
+  monthChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "#f8fafc",
+    marginRight: 8,
+  },
+  monthChipActive: { backgroundColor: "#4f46e5" },
+  monthText: { fontSize: 13, fontWeight: "bold", color: "#64748b" },
+  monthTextActive: { color: "#ffffff" },
+
+  copyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#1e293b",
+    marginHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  copyButtonText: { color: "#ffffff", fontSize: 14, fontWeight: "bold" },
+
+  listContainer: { paddingHorizontal: 20, paddingBottom: 80 }, // FAB için alttan boşluk
+
+  emptyContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+  },
+  emptyIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#475569",
+    marginBottom: 8,
+  },
+  emptyDesc: { fontSize: 14, color: "#94a3b8", textAlign: "center" },
+
+  transactionCard: {
     backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 1,
     borderWidth: 1,
     borderColor: "#f1f5f9",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  cardHeader: {
+  tHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 12,
   },
-  badge: {
-    paddingHorizontal: 8,
+  tBadge: {
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 6,
+    borderRadius: 8,
     borderWidth: 1,
   },
-  badgeIncome: { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
-  badgeExpense: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
-  badgeText: { fontSize: 10, fontWeight: "900", textTransform: "uppercase" },
-  textIncome: { color: "#16a34a" },
-  textExpense: { color: "#dc2626" },
-  amount: { fontSize: 18, fontWeight: "900" },
-  cardBody: {
+  tBadgeText: { fontSize: 11, fontWeight: "900" },
+  tAmount: { fontSize: 18, fontWeight: "900" },
+  tBody: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-end",
-  },
-  dateText: {
-    fontSize: 12,
-    color: "#94a3b8",
-    fontWeight: "bold",
-    marginBottom: 4,
-  },
-  descriptionText: {
-    fontSize: 14,
-    color: "#475569",
-    fontWeight: "500",
-    maxWidth: 200,
-  },
-  actionButtons: { flexDirection: "row", gap: 8 },
-  iconButton: { padding: 6, backgroundColor: "#f8fafc", borderRadius: 8 },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    padding: 20,
   },
-  emptyText: {
-    fontSize: 16,
+  tDate: { fontSize: 13, fontWeight: "bold", color: "#94a3b8" },
+  tDesc: {
+    fontSize: 13,
     color: "#64748b",
-    fontWeight: "600",
-    marginBottom: 24,
+    flex: 1,
+    textAlign: "right",
+    marginLeft: 16,
   },
+  tActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#f8fafc",
+  },
+  actionBtn: { padding: 6, backgroundColor: "#fef2f2", borderRadius: 8 },
+
+  bgGreenLight: { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
+  bgRedLight: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
+  textGreen: { color: "#16a34a" },
+  textRed: { color: "#dc2626" },
+
+  // Yüzen (FAB) Ekle Butonu
   fab: {
     position: "absolute",
     bottom: 20,
@@ -569,38 +805,82 @@ const styles = StyleSheet.create({
     alignItems: "center",
     shadowColor: "#4f46e5",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.4,
     shadowRadius: 8,
     elevation: 5,
   },
 
-  // Modal Stilleri
+  // Ortak Modal Stilleri
   modalOverlay: {
     flex: 1,
-    justifyContent: "flex-end",
     backgroundColor: "rgba(15, 23, 42, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
   },
-  modalContent: {
+
+  // Yıl Modal Stilleri
+  yearModalContent: {
     backgroundColor: "#ffffff",
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    maxHeight: "90%",
+    borderRadius: 24,
+    padding: 20,
+    width: "80%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  modalHeader: {
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#1e293b",
+    marginBottom: 16,
+  },
+  yearModalItem: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 24,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
   },
-  modalTitle: { fontSize: 20, fontWeight: "900", color: "#1e293b" },
-  closeButton: { padding: 8, backgroundColor: "#f1f5f9", borderRadius: 20 },
+  yearModalItemActive: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    borderBottomWidth: 0,
+  },
+  yearModalText: { fontSize: 16, fontWeight: "600", color: "#64748b" },
+  yearModalTextActive: { color: "#4f46e5", fontWeight: "900" },
+
+  // Form Modal Stilleri
+  formModalContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    padding: 24,
+    width: "100%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    maxHeight: "90%",
+  },
+  modalHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  closeBtn: { padding: 8, backgroundColor: "#f1f5f9", borderRadius: 12 },
+
   typeSelector: {
     flexDirection: "row",
     backgroundColor: "#f1f5f9",
     padding: 4,
     borderRadius: 16,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   typeBtn: {
     flex: 1,
@@ -611,7 +891,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
   },
-  typeBtnExpenseActive: {
+  typeBtnExpense: {
     backgroundColor: "#ffffff",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -619,7 +899,7 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
-  typeBtnIncomeActive: {
+  typeBtnIncome: {
     backgroundColor: "#ffffff",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -628,31 +908,15 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   typeBtnText: { fontWeight: "bold", color: "#64748b" },
+
   inputLabel: {
     fontSize: 13,
     fontWeight: "bold",
     color: "#475569",
     marginBottom: 8,
-    marginTop: 12,
   },
-  categoryScroll: { flexDirection: "row", marginBottom: 8 },
-  catChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: "#ffffff",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    marginRight: 8,
-  },
-  catChipExpense: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
-  catChipIncome: { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
-  catChipText: { fontSize: 13, fontWeight: "bold", color: "#64748b" },
   input: {
-    backgroundColor: "#f8fafc",
+    backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 16,
@@ -660,13 +924,42 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "bold",
     color: "#1e293b",
+    marginBottom: 16,
   },
-  saveButton: {
+
+  chipContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 16,
+  },
+  catChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: "#ffffff",
+    borderColor: "#e2e8f0",
+  },
+  catChipExpense: { backgroundColor: "#fef2f2", borderColor: "#fecaca" },
+  catChipIncome: { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" },
+  catChipText: { fontSize: 13, fontWeight: "bold", color: "#475569" },
+
+  submitButton: {
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: "#4f46e5",
     paddingVertical: 16,
     borderRadius: 16,
-    alignItems: "center",
-    marginTop: 24,
+    marginTop: 8,
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  saveButtonText: { color: "#ffffff", fontSize: 16, fontWeight: "bold" },
+  submitButtonText: { color: "#ffffff", fontSize: 16, fontWeight: "bold" },
 });

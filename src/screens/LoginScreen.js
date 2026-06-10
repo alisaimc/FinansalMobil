@@ -1,10 +1,10 @@
 import { useContext, useState } from "react";
 import {
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { AuthContext } from "../context/AuthContext";
 
@@ -30,6 +30,7 @@ export default function LoginScreen() {
         <TextInput
           style={styles.input}
           placeholder="Kullanıcı Adı"
+          placeholderTextColor="#94a3b8"
           value={username}
           onChangeText={setUsername}
           autoCapitalize="none"
@@ -37,6 +38,7 @@ export default function LoginScreen() {
         <TextInput
           style={styles.input}
           placeholder="Şifre"
+          placeholderTextColor="#94a3b8"
           value={password}
           onChangeText={setPassword}
           secureTextEntry

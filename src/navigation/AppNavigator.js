@@ -1,31 +1,23 @@
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { LayoutDashboard, ListOrdered, Settings } from "lucide-react-native";
 import { useContext } from "react";
 import { ActivityIndicator, View } from "react-native";
 
-import {
-  LayoutDashboard,
-  ListOrdered,
-  Settings,
-  Shield,
-  User,
-} from "lucide-react-native";
-
-import ProfileScreen from "../screens/ProfileScreen";
-// CONTEXT VE EKRANLAR
 import { AuthContext } from "../context/AuthContext";
-import AdminScreen from "../screens/AdminScreen";
 import DashboardScreen from "../screens/DashboardScreen";
 import ListScreen from "../screens/ListScreen";
 import LoginScreen from "../screens/LoginScreen";
 import SettingsScreen from "../screens/SettingsScreen";
+// İŞTE EKSİK OLAN IMPORT BURADA:
+import ProfileScreen from "../screens/ProfileScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
-  const { currentUser } = useContext(AuthContext); // Admin kontrolü için
+  const { currentUser } = useContext(AuthContext);
 
   return (
     <Tab.Navigator
@@ -58,7 +50,6 @@ function MainTabs() {
           ),
         }}
       />
-      {/* Sadece admin yetkisi olanlar Ayarlar sekmesini görür */}
       {currentUser?.role === "admin" && (
         <Tab.Screen
           name="Ayarlar"
@@ -66,25 +57,6 @@ function MainTabs() {
           options={{
             tabBarIcon: ({ color, size }) => (
               <Settings color={color} size={size} />
-            ),
-          }}
-        />
-      )}
-      <Tab.Screen
-        name="Profil"
-        component={ProfileScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
-        }}
-      />
-      {/* Sadece admin yetkisi olanlar Admin sekmesini görür */}
-      {currentUser?.role === "admin" && (
-        <Tab.Screen
-          name="Admin"
-          component={AdminScreen}
-          options={{
-            tabBarIcon: ({ color, size }) => (
-              <Shield color={color} size={size} />
             ),
           }}
         />
@@ -110,7 +82,15 @@ export default function AppNavigator() {
         {userToken === null ? (
           <Stack.Screen name="Login" component={LoginScreen} />
         ) : (
-          <Stack.Screen name="Main" component={MainTabs} />
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+            {/* Profil sayfası Modal (açılır pencere) olarak ayarlandı */}
+            <Stack.Screen
+              name="Profile"
+              component={ProfileScreen}
+              options={{ presentation: "modal" }}
+            />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

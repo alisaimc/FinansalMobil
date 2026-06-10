@@ -1,102 +1,167 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { useContext, useEffect, useRef } from "react";
+import { Animated, Dimensions, StyleSheet, View } from "react-native";
+import { AuthContext } from "../src/context/AuthContext";
 
-export default function WeatherBackground({ city }) {
-  const [weatherData, setWeatherData] = useState({ type: "clear", temp: null });
+const { width, height } = Dimensions.get("window");
 
-  // Standart şehir (Bursa) eğer dışarıdan gelmezse
-  const defaultCity = { name: "Bursa", lat: 40.1824, lon: 29.0669 };
-  const currentCity = city || defaultCity;
-
+// 1. YAĞMUR ANİMASYONU
+const RainDrop = ({ delay, left }) => {
+  const translateY = useRef(new Animated.Value(-50)).current;
   useEffect(() => {
-    fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${currentCity.lat}&longitude=${currentCity.lon}&current_weather=true`,
-    )
-      .then((res) => res.json())
-      .then((data) => {
-        const code = data.current_weather.weathercode;
-        const temp = data.current_weather.temperature;
-        let type = "clear";
+    Animated.loop(
+      Animated.timing(translateY, {
+        toValue: height + 50,
+        duration: 800 + Math.random() * 400, // Hızlı düşüş
+        delay: delay,
+        useNativeDriver: true,
+      }),
+    ).start();
+  }, []);
+  return (
+    <Animated.View
+      style={[styles.rainDrop, { left, transform: [{ translateY }] }]}
+    />
+  );
+};
 
-        if ([71, 73, 75, 77, 85, 86].includes(code)) type = "snow";
-        else if (
-          [51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99].includes(code)
-        )
-          type = "rain";
-        else if ([1, 2, 3, 45, 48].includes(code)) type = "clouds";
+// 2. KAR ANİMASYONU
+const SnowFlake = ({ delay, left, size }) => {
+  const translateY = useRef(new Animated.Value(-50)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(translateY, {
+        toValue: height + 50,
+        duration: 3000 + Math.random() * 2000, // Yavaş süzülüş
+        delay: delay,
+        useNativeDriver: true,
+      }),
+    ).start();
+  }, []);
+  return (
+    <Animated.View
+      style={[
+        styles.snowFlake,
+        {
+          left,
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          transform: [{ translateY }],
+        },
+      ]}
+    />
+  );
+};
 
-        setWeatherData({ type, temp });
-      })
-      .catch((err) => console.log("Hava durumu çekilemedi", err));
-  }, [currentCity]);
+// 3. GÜNEŞ IŞIĞI (PARLAMA) ANİMASYONU
+const SunGlow = () => {
+  const scale = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scale, {
+          toValue: 1.2,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+      ]),
+    ).start();
+  }, []);
+  return <Animated.View style={[styles.sunGlow, { transform: [{ scale }] }]} />;
+};
 
-  // Hava durumuna göre arka plan geçiş renkleri
+// --- ANA BİLEŞEN ---
+export default function WeatherBackground() {
+  const { currentUser } = useContext(AuthContext);
+
+  // Veritabanındaki ayarı okuma (JSON formatında saklayacağız)
+  let config = { color: "grad-ocean", weather: "clear" };
+  try {
+    if (currentUser?.backgroundImage?.startsWith("{")) {
+      config = JSON.parse(currentUser.backgroundImage);
+    }
+  } catch (e) {}
+
+  // Arka Plan Renkleri
   const bgGradients = {
-    snow: ["#bae6fd", "#e2e8f0", "#7dd3fc"],
-    rain: ["#64748b", "#94a3b8", "#cbd5e1"],
-    clouds: ["#cbd5e1", "#e2e8f0", "#f1f5f9"],
-    clear: ["#f0fdfa", "#fefce8", "#e0e7ff"],
+    "grad-ocean": ["#0ea5e9", "#3b82f6", "#2563eb"],
+    "grad-sunset": ["#f59e0b", "#ef4444", "#b91c1c"],
+    "grad-forest": ["#10b981", "#059669", "#047857"],
+    "grad-dark": ["#1e293b", "#0f172a", "#000000"],
+    "solid-purple": ["#8b5cf6", "#8b5cf6", "#8b5cf6"],
+    "solid-blue": ["#3b82f6", "#3b82f6", "#3b82f6"],
+    "solid-red": ["#ef4444", "#ef4444", "#ef4444"],
   };
 
-  const weatherIcons = { snow: "❄️", rain: "🌧️", clouds: "☁️", clear: "☀️" };
+  const colors = bgGradients[config.color] || bgGradients["grad-ocean"];
+
+  // Ekrana rastgele dağılacak parçacık sayıları
+  const particles = Array.from({ length: 30 });
 
   return (
-    <>
-      {/* ARKA PLAN RENGİ */}
+    <View style={StyleSheet.absoluteFillObject}>
+      {/* 1. KATMAN: SABİT RENK GEÇİŞİ */}
       <LinearGradient
-        colors={bgGradients[weatherData.type]}
+        colors={colors}
         style={StyleSheet.absoluteFillObject}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
       />
 
-      {/* HAVA DURUMU KARTI (SAĞ ALT KÖŞE) */}
-      {weatherData.temp !== null && (
-        <View style={styles.weatherCard}>
-          <View style={styles.weatherInfo}>
-            <Text style={styles.cityText}>
-              {currentCity.name.toUpperCase()}
-            </Text>
-            <Text style={styles.tempText}>{weatherData.temp}°C</Text>
-          </View>
-          <Text style={styles.iconText}>{weatherIcons[weatherData.type]}</Text>
-        </View>
-      )}
-    </>
+      {/* 2. KATMAN: ANİMASYONLAR (Seçime Göre) */}
+      <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+        {config.weather === "rain" &&
+          particles.map((_, i) => (
+            <RainDrop
+              key={i}
+              delay={Math.random() * 1000}
+              left={Math.random() * width}
+            />
+          ))}
+
+        {config.weather === "snow" &&
+          particles.map((_, i) => (
+            <SnowFlake
+              key={i}
+              delay={Math.random() * 3000}
+              left={Math.random() * width}
+              size={4 + Math.random() * 6}
+            />
+          ))}
+
+        {config.weather === "clear" && <SunGlow />}
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  weatherCard: {
+  rainDrop: {
     position: "absolute",
-    bottom: 24,
-    right: 24,
-    backgroundColor: "rgba(255, 255, 255, 0.7)",
-    borderColor: "rgba(255, 255, 255, 0.6)",
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    zIndex: 10,
-    // iOS Gölge
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    // Android Gölge
-    elevation: 5,
+    top: -50,
+    width: 2,
+    height: 24,
+    backgroundColor: "rgba(255, 255, 255, 0.4)",
+    borderRadius: 2,
   },
-  weatherInfo: { flexDirection: "col" },
-  cityText: {
-    fontSize: 10,
-    fontWeight: "900",
-    color: "#64748b",
-    letterSpacing: 1,
+  snowFlake: {
+    position: "absolute",
+    top: -50,
+    backgroundColor: "rgba(255, 255, 255, 0.6)",
   },
-  tempText: { fontSize: 16, fontWeight: "900", color: "#334155" },
-  iconText: { fontSize: 24 },
+  sunGlow: {
+    position: "absolute",
+    top: -100,
+    right: -100,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+  },
 });

@@ -1,15 +1,15 @@
 import { Plus, Shield, Trash2, Users } from "lucide-react-native";
 import { useCallback, useContext, useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import apiClient from "../api/apiClient";
 import { AuthContext } from "../context/AuthContext";
@@ -151,7 +151,8 @@ export default function AdminScreen() {
             onChangeText={(t) =>
               setNewUserForm({ ...newUserForm, username: t })
             }
-            placeholder="Örn: ahmet123"
+            placeholder="Örn: ahmet"
+            placeholderTextColor="#94a3b8"
             autoCapitalize="none"
           />
 
@@ -163,6 +164,7 @@ export default function AdminScreen() {
               setNewUserForm({ ...newUserForm, password: t })
             }
             placeholder="Örn: 123456"
+            placeholderTextColor="#94a3b8"
             secureTextEntry
           />
 
