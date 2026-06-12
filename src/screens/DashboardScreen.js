@@ -1,10 +1,10 @@
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { ArrowDownCircle, ArrowUpCircle, Wallet } from "lucide-react-native";
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
   Image,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,27 +12,26 @@ import {
   View,
 } from "react-native";
 import { BarChart } from "react-native-chart-kit";
+import { SafeAreaView } from "react-native-safe-area-context";
 import apiClient from "../api/apiClient";
+import { AuthContext } from "../context/AuthContext";
 
-// Dosyalar en dıştaki (root) components klasöründe olduğu için ../../ kullanıyoruz
+// Component yolları senin projene göre ayarlandı
 import InteractiveClock from "../../components/InteractiveClock";
 import WeatherBackground from "../../components/WeatherBackground";
 
-// Baştaki '/' işareti düzeltildi, '../' yapıldı
-import { AuthContext } from "../context/AuthContext";
-
-// Ekran genişliğini alıyoruz (Grafik için lazım)
 const screenWidth = Dimensions.get("window").width;
 
-export default function DashboardScreen({ navigation }) {
+export default function DashboardScreen() {
+  const navigation = useNavigation();
   const { currentUser } = useContext(AuthContext);
 
   const [isLoading, setIsLoading] = useState(true);
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState({ net: 0, income: 0, expense: 0 });
   const [chartData, setChartData] = useState({
-    labels: [],
-    datasets: [{ data: [] }],
+    labels: ["Oca", "Şub", "Mar", "Nis", "May", "Haz"],
+    datasets: [{ data: [0, 0, 0, 0, 0, 0] }],
   });
 
   const now = new Date();
@@ -46,21 +45,6 @@ export default function DashboardScreen({ navigation }) {
       currency: "TRY",
     }).format(amount);
   };
-
-  const fetchTransactions = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const response = await apiClient.get("/api/transaction");
-      const allTransactions = response.data;
-
-      setTransactions(allTransactions);
-      calculateSummaryAndChart(allTransactions);
-    } catch (error) {
-      console.error("Veriler çekilemedi:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
 
   const calculateSummaryAndChart = (data) => {
     // 1. Bu ayın özetini hesapla
@@ -78,15 +62,13 @@ export default function DashboardScreen({ navigation }) {
 
     setSummary({ income, expense, net: income - expense });
 
-    // 2. Yıllık grafik verisini hazırla (Mobil ekrana sığması için ilk 6 veya son 6 ayı baz alabiliriz)
-    // Şimdilik 1'den 6'ya kadar olan ayları (Ocak - Haziran) alalım
+    // 2. Yıllık grafik verisini hazırla (İlk 6 ay: Oca - Haz)
     const months = ["Oca", "Şub", "Mar", "Nis", "May", "Haz"];
     const monthlyNet = [0, 0, 0, 0, 0, 0];
 
     data.forEach((t) => {
       if (t.date && t.date.startsWith(currentYear)) {
         const monthIndex = parseInt(t.date.substring(5, 7), 10) - 1;
-        // İlk 6 ay içindeyse hesapla
         if (monthIndex < 6) {
           const amount = parseFloat(t.amount || 0);
           if (t.type === "GELİR") monthlyNet[monthIndex] += amount;
@@ -99,15 +81,33 @@ export default function DashboardScreen({ navigation }) {
       labels: months,
       datasets: [
         {
-          data: monthlyNet.map((val) => (val === 0 ? 0.1 : val)), // 0 değerlerinde grafiğin çökmemesi için küçük bir değer veriyoruz
+          // 0 değerlerinde grafiğin çökmemesi için ufak bir hack
+          data: monthlyNet.map((val) => (val === 0 ? 0.1 : val)),
         },
       ],
     });
   };
 
-  useEffect(() => {
-    fetchTransactions();
-  }, [fetchTransactions]);
+  const fetchTransactions = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const response = await apiClient.get("/api/transaction");
+      const allTransactions = response.data;
+
+      setTransactions(allTransactions);
+      calculateSummaryAndChart(allTransactions);
+    } catch (error) {
+      console.error("Veriler çekilemedi:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchTransactions();
+    }, [fetchTransactions]),
+  );
 
   if (isLoading) {
     return (
@@ -129,16 +129,13 @@ export default function DashboardScreen({ navigation }) {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Karşılama Başlığı ve İnteraktif Saat (Yan Yana) */}
-        {/* Karşılama Başlığı ve İnteraktif Saat (Yan Yana) */}
+        {/* Karşılama Başlığı ve İnteraktif Saat */}
         <View style={styles.headerRow}>
-          {/* SOL ÜST: Profil Resmi ve İsim (Tıklanabilir) */}
           <TouchableOpacity
             style={styles.profileButton}
             onPress={() => navigation.navigate("Profile")}
             activeOpacity={0.7}
           >
-            {/* Profil Fotoğrafı veya Baş Harfler */}
             {currentUser?.profilePhoto ? (
               <Image
                 source={{ uri: currentUser.profilePhoto }}
@@ -164,7 +161,6 @@ export default function DashboardScreen({ navigation }) {
             </View>
           </TouchableOpacity>
 
-          {/* SAAT BİLEŞENİ BURADA */}
           <InteractiveClock />
         </View>
 
@@ -230,7 +226,7 @@ export default function DashboardScreen({ navigation }) {
           </Text>
           <BarChart
             data={chartData}
-            width={screenWidth - 40} // Sağ ve sol padding boşluklarını çıkarıyoruz
+            width={screenWidth - 40}
             height={220}
             yAxisLabel="₺"
             chartConfig={{
@@ -240,15 +236,10 @@ export default function DashboardScreen({ navigation }) {
               decimalPlaces: 0,
               color: (opacity = 1) => `rgba(79, 70, 229, ${opacity})`,
               labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
-              style: {
-                borderRadius: 16,
-              },
+              style: { borderRadius: 16 },
               barPercentage: 0.6,
             }}
-            style={{
-              marginVertical: 8,
-              borderRadius: 16,
-            }}
+            style={{ marginVertical: 8, borderRadius: 16 }}
           />
         </View>
       </ScrollView>
@@ -257,15 +248,9 @@ export default function DashboardScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 12, color: "#64748b", fontWeight: "bold" },
-  safeArea: { flex: 1, backgroundColor: "transparent" },
-  loadingText: { marginTop: 12, color: "#64748b", fontWeight: "bold" },
-  safeArea: { flex: 1, backgroundColor: "#f8fafc" },
+  safeArea: { flex: 1, backgroundColor: "transparent" }, // Arka planda hava durumu efekti için transparan yapıldı
   container: { flex: 1 },
   content: { padding: 20 },
   headerRow: {
@@ -275,6 +260,22 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     zIndex: 100,
   },
+  profileButton: { flexDirection: "row", alignItems: "center", gap: 12 },
+  avatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#4f46e5",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  avatarText: { color: "#ffffff", fontSize: 18, fontWeight: "900" },
+  avatarImage: { width: 44, height: 44, borderRadius: 22 },
   greeting: { fontSize: 16, color: "#64748b", fontWeight: "600" },
   username: {
     fontSize: 24,
@@ -342,7 +343,6 @@ const styles = StyleSheet.create({
   },
   subCardAmount: { fontSize: 20, fontWeight: "900" },
 
-  // Grafik Stilleri
   chartContainer: {
     marginTop: 24,
     backgroundColor: "#ffffff",
@@ -364,21 +364,4 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     alignSelf: "flex-start",
   },
-  // styles objesinin içine bunları ekle
-  profileButton: { flexDirection: "row", alignItems: "center", gap: 12 },
-  avatarFallback: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "#4f46e5",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#4f46e5",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  avatarText: { color: "#ffffff", fontSize: 18, fontWeight: "900" },
-  avatarImage: { width: 44, height: 44, borderRadius: 22 },
 });

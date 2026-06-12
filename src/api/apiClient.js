@@ -14,13 +14,27 @@ const apiClient = axios.create({
 // Her istek gitmeden önce araya girip, hafızadaki (AsyncStorage) bileti (token) ekliyoruz
 apiClient.interceptors.request.use(
   async (config) => {
-    const token = await AsyncStorage.getItem("userToken");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    // HATA BURADAYDI: Token'ı tek başına değil, currentUser objesinin içinden çekiyoruz!
+    const storedUser = await AsyncStorage.getItem("currentUser");
+
+    if (storedUser) {
+      const user = JSON.parse(storedUser);
+      if (user.token) {
+        config.headers.Authorization = `Bearer ${user.token}`;
+      }
     }
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  },
+);
+
+// Hataları daha net görebilmek için küçük bir hata ayıklayıcı (İsteğe bağlı ama hayat kurtarır)
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error("API Hatası:", error.response?.data || error.message);
     return Promise.reject(error);
   },
 );

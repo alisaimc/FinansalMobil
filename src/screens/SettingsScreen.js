@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 // Lock ikonunu import'a ekledik
+import { useFocusEffect } from "@react-navigation/native";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -21,11 +22,10 @@ import {
   Plus,
   Settings,
   Trash2,
-  Users
+  Users,
 } from "lucide-react-native";
 import apiClient from "../api/apiClient";
 import { AuthContext } from "../context/AuthContext";
-
 export default function SettingsScreen() {
   const { currentUser } = useContext(AuthContext);
   const [isLoading, setIsLoading] = useState(true);
@@ -76,9 +76,12 @@ export default function SettingsScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  // Sekme her tıklandığında verileri anında tazele!
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+  );
 
   // ==========================================
   // 1. KULLANICI YÖNETİMİ AKSİYONLARI

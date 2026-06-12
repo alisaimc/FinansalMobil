@@ -1,3 +1,7 @@
+import { useFocusEffect } from "@react-navigation/native";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -11,17 +15,13 @@ import {
   Trash2,
   X,
 } from "lucide-react-native";
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useCallback, useContext, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,8 +30,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as XLSX from "xlsx";
 import apiClient from "../api/apiClient";
 import { AuthContext } from "../context/AuthContext";
+
+// YENİ EKLENDİ: Tarih Seçici
+import { Picker } from "@react-native-picker/picker";
 
 const MONTHS = [
   { value: "01", label: "Ocak" },
@@ -49,7 +53,9 @@ const MONTHS = [
 ];
 
 const currentYear = new Date().getFullYear();
-const YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 3 + i));
+
+// Sadece bu yılı ve geçmiş 4 yılı (toplam 5 yıl) listeler. Gelecek yılları filtreye dahil etmez.
+const YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 4 + i));
 
 export default function ListScreen({ navigation }) {
   const { currentUser } = useContext(AuthContext);
@@ -64,10 +70,12 @@ export default function ListScreen({ navigation }) {
   );
   const [selectedYear, setSelectedYear] = useState(String(currentYear));
 
-  // Modallar
   const [isYearModalOpen, setIsYearModalOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // YENİ: Takvim State'leri
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [formData, setFormData] = useState({
     id: null,
@@ -80,7 +88,6 @@ export default function ListScreen({ navigation }) {
 
   const fetchData = useCallback(async () => {
     try {
-      setIsLoading(true);
       const [transRes, catRes] = await Promise.all([
         apiClient.get("/api/transaction"),
         apiClient.get("/api/category"),
@@ -94,11 +101,12 @@ export default function ListScreen({ navigation }) {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+  );
 
-  // --- FİLTRELEME VE HESAPLAMA ---
   const currentMonthTransactions = useMemo(() => {
     return transactions
       .filter((t) => {
@@ -109,7 +117,6 @@ export default function ListScreen({ navigation }) {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [transactions, selectedMonth, selectedYear]);
 
-  // --- GEÇEN AYDAN AKTARMA MANTIĞI ---
   const { prevMonthStr, prevYearStr } = useMemo(() => {
     let m = parseInt(selectedMonth) - 1;
     let y = parseInt(selectedYear);
@@ -165,15 +172,26 @@ export default function ListScreen({ navigation }) {
                   amount: t.amount,
                   description: t.description,
                   type: t.type,
-                  date: `${selectedYear}-${selectedMonth}-${String(adjustedDay).padStart(2, "0")}`,
+                  date: `${selectedYear}-${selectedMonth}-${String(
+                    adjustedDay,
+                  ).padStart(2, "0")}`,
                 };
               });
-              await apiClient.post("/api/transaction", newTransactions);
+
+              const response = await apiClient.post(
+                "/api/transaction",
+                newTransactions,
+              );
+              const savedData =
+                response.data && Array.isArray(response.data)
+                  ? response.data
+                  : newTransactions;
+              setTransactions((prev) => [...savedData, ...prev]);
+
               Alert.alert(
                 "Başarılı",
                 `${newTransactions.length} kayıt başarıyla aktarıldı!`,
               );
-              fetchData();
             } catch (error) {
               Alert.alert("Hata", "Kayıtlar kopyalanırken hata oluştu.");
             } finally {
@@ -185,55 +203,123 @@ export default function ListScreen({ navigation }) {
     );
   };
 
-  // --- FORM İŞLEMLERİ (EKLE/DÜZENLE) ---
+  const formatMoneyForInput = (numStr) => {
+    if (!numStr) return "";
+    let stringVal = String(numStr).replace(".", ",");
+    const parts = stringVal.split(",");
+    const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    const decPart = parts.length > 1 ? `,${parts[1].slice(0, 2)}` : "";
+    return intPart + decPart;
+  };
+
   const openForm = (t = null) => {
+    let initialDate = new Date();
+    let displayDate = `${String(initialDate.getDate()).padStart(
+      2,
+      "0",
+    )}.${String(initialDate.getMonth() + 1).padStart(
+      2,
+      "0",
+    )}.${initialDate.getFullYear()}`;
+
+    if (t && t.date) {
+      displayDate = t.date.split("-").reverse().join(".");
+    } else {
+      displayDate = `01.${selectedMonth}.${selectedYear}`;
+    }
+
     setFormData(
       t
         ? {
             id: t._id || t.id,
             type: t.type,
             categoryId: t.categoryId,
-            date: t.date,
-            amount: String(t.amount),
+            date: displayDate,
+            amount: formatMoneyForInput(t.amount),
             description: t.description || "",
           }
         : {
             id: null,
             type: "GİDER",
             categoryId: "",
-            date: `${selectedYear}-${selectedMonth}-01`,
+            date: displayDate,
             amount: "",
             description: "",
           },
     );
+
     setIsFormOpen(true);
+  };
+
+  const handleAmountChange = (text) => {
+    let cleaned = text.replace(/[^0-9,]/g, "");
+
+    const commaCount = (cleaned.match(/,/g) || []).length;
+    if (commaCount > 1) {
+      cleaned = cleaned.substring(0, cleaned.lastIndexOf(","));
+    }
+
+    const rawNumber = parseFloat(cleaned.replace(",", "."));
+    if (rawNumber > 999999.99) return;
+
+    let formatted = cleaned;
+    if (cleaned.includes(",")) {
+      const parts = cleaned.split(",");
+      const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      const decPart = parts[1].slice(0, 2);
+      formatted = `${intPart},${decPart}`;
+    } else {
+      formatted = cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    }
+
+    setFormData({ ...formData, amount: formatted });
   };
 
   const handleTransactionSubmit = async () => {
     if (!formData.categoryId)
       return Alert.alert("Uyarı", "Lütfen bir kategori seçin.");
-    if (!formData.date || !formData.amount)
-      return Alert.alert("Uyarı", "Tarih ve Tutar zorunludur.");
+    if (!formData.amount)
+      return Alert.alert("Uyarı", "Lütfen bir tutar girin.");
 
     setIsSubmitting(true);
     try {
+      const [day, month, year] = formData.date.split(".");
+      const dbDate = `${year}-${month}-${day}`;
+
+      const parsedAmount = parseFloat(
+        formData.amount.replace(/\./g, "").replace(",", "."),
+      );
+
       const selectedCat = categories.find(
         (c) => String(c._id || c.id) === String(formData.categoryId),
       );
       const payload = {
         ...formData,
-        amount: parseFloat(formData.amount.replace(",", ".")),
+        date: dbDate,
+        amount: parsedAmount,
         categoryName: selectedCat ? selectedCat.name : formData.categoryId,
       };
 
       const response = await apiClient.post("/api/transaction", payload);
+
+      const savedTransaction = response.data || payload;
+      if (formData.id) {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            String(t._id || t.id) === String(formData.id)
+              ? savedTransaction
+              : t,
+          ),
+        );
+      } else {
+        setTransactions((prev) => [savedTransaction, ...prev]);
+      }
 
       Alert.alert(
         "Başarılı",
         formData.id ? "Kayıt güncellendi!" : "Kayıt eklendi!",
       );
       setIsFormOpen(false);
-      fetchData(); // Listeyi yenile
     } catch (error) {
       Alert.alert("Hata", "İşlem sırasında bir hata oluştu.");
     } finally {
@@ -263,6 +349,188 @@ export default function ListScreen({ navigation }) {
     ]);
   };
 
+  const handleExportExcel = async () => {
+    try {
+      const headers = ["Tür", "Kategori", "Tarih", "Tutar (TL)", "Açıklama"];
+      const rows = currentMonthTransactions.map((t) => {
+        const cat = categories.find(
+          (c) => String(c._id || c.id) === String(t.categoryId),
+        );
+        return [
+          t.type,
+          cat ? cat.name : t.categoryName || "Bilinmeyen",
+          t.date.split("-").reverse().join("."),
+          t.amount,
+          t.description || "",
+        ];
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Kayitlar");
+      const wbout = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+
+      const uri =
+        FileSystem.cacheDirectory +
+        `Finans_${selectedMonth}_${selectedYear}.xlsx`;
+      await FileSystem.writeAsStringAsync(uri, wbout, { encoding: "base64" });
+      await Sharing.shareAsync(uri);
+    } catch (error) {
+      Alert.alert("Hata", "Excel oluşturulurken bir sorun oluştu.");
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const templateData = [
+        ["KATEGORI_ID", "TARIH(YYYY-MM-DD)", "TUTAR", "ACIKLAMA"],
+        [
+          "Örnek_ID_Buraya_Kopyalayin",
+          "2026-06-15",
+          1500.5,
+          "İsteğe Bağlı Açıklama",
+        ],
+      ];
+      const referenceData = [["KATEGORI_ADI", "KATEGORI_ID", "TUR"]];
+      categories.forEach((c) =>
+        referenceData.push([c.name, c._id || c.id, c.type]),
+      );
+
+      const wb = XLSX.utils.book_new();
+      const wsTemplate = XLSX.utils.aoa_to_sheet(templateData);
+      const wsReference = XLSX.utils.aoa_to_sheet(referenceData);
+      wsTemplate["!cols"] = [
+        { wch: 30 },
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 40 },
+      ];
+      wsReference["!cols"] = [{ wch: 25 }, { wch: 30 }, { wch: 15 }];
+      XLSX.utils.book_append_sheet(wb, wsTemplate, "Veri Girişi");
+      XLSX.utils.book_append_sheet(wb, wsReference, "Kategori ID Listesi");
+
+      const wbout = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+      const uri = FileSystem.cacheDirectory + "Iceri_Aktarma_Sablonu.xlsx";
+      await FileSystem.writeAsStringAsync(uri, wbout, { encoding: "base64" });
+      await Sharing.shareAsync(uri, { dialogTitle: "Şablonu İndir" });
+    } catch (error) {
+      Alert.alert("Hata", "Şablon oluşturulurken bir sorun meydana geldi.");
+    }
+  };
+
+  const handleImportExcel = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || result.type === "cancel") return;
+
+      let fileUri = result.assets ? result.assets[0].uri : result.uri;
+      if (!fileUri) return Alert.alert("Hata", "Dosya yolu okunamadı.");
+      if (
+        !fileUri.toLowerCase().endsWith(".xlsx") &&
+        !fileUri.toLowerCase().endsWith(".xls")
+      ) {
+        return Alert.alert("Geçersiz Dosya", "Lütfen Excel dosyası seçin.");
+      }
+
+      let fileData;
+      try {
+        fileData = await FileSystem.readAsStringAsync(fileUri, {
+          encoding: "base64",
+        });
+      } catch (e) {
+        fileData = await FileSystem.readAsStringAsync(decodeURI(fileUri), {
+          encoding: "base64",
+        });
+      }
+
+      const wb = XLSX.read(fileData, { type: "base64" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
+      const parsedData = [];
+      const localDuplicates = new Set();
+      let errorMsg = "";
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const catId = row["KATEGORI_ID"]?.toString().trim();
+        const date = row["TARIH(YYYY-MM-DD)"]?.toString().trim();
+        const amount = row["TUTAR"];
+        const desc = row["ACIKLAMA"]?.toString().trim();
+
+        if (catId === "Örnek_ID_Buraya_Kopyalayin") continue;
+        if (!catId && !date && !amount) continue;
+
+        if (!catId || !date || amount === "" || amount === undefined) {
+          errorMsg = `Satır ${i + 2}: ID, Tarih ve Tutar zorunludur!`;
+          break;
+        }
+
+        const category = categories.find(
+          (c) => String(c._id || c.id) === String(catId),
+        );
+        if (!category) {
+          errorMsg = `Satır ${i + 2}: Geçersiz Kategori ID'si!`;
+          break;
+        }
+
+        const yearMonth = date.substring(0, 7);
+        const uniqueKey = `${catId}-${yearMonth}`;
+        if (localDuplicates.has(uniqueKey)) {
+          errorMsg = `Satır ${i + 2}: Aynı ay ve kategoride mükerrer kayıt var.`;
+          break;
+        }
+        localDuplicates.add(uniqueKey);
+
+        const existsInDb = transactions.some((t) => {
+          const tYearMonth = t.date ? t.date.substring(0, 7) : "";
+          return (
+            String(t.categoryId) === String(catId) && tYearMonth === yearMonth
+          );
+        });
+
+        if (existsInDb) {
+          errorMsg = `Satır ${i + 2}: Bu kayıt sistemde zaten mevcut!`;
+          break;
+        }
+
+        parsedData.push({
+          categoryId: catId,
+          categoryName: category.name,
+          date: date,
+          amount: parseFloat(amount.toString().replace(",", ".")),
+          description: desc || "",
+          type: category.type,
+        });
+      }
+
+      if (errorMsg) return Alert.alert("Hatalı Veri", errorMsg);
+      if (parsedData.length === 0)
+        return Alert.alert("Boş Dosya", "Yüklenecek veri bulunamadı.");
+
+      const response = await apiClient.post("/api/transaction", parsedData);
+
+      if (response.status === 200 || response.status === 201) {
+        const savedArray =
+          response.data && Array.isArray(response.data)
+            ? response.data
+            : parsedData;
+        setTransactions((prev) => [...savedArray, ...prev]);
+        Alert.alert(
+          "Başarılı!",
+          `${parsedData.length} adet kayıt listeye eklendi.`,
+        );
+      } else {
+        throw new Error("Kayıt başarısız.");
+      }
+    } catch (error) {
+      Alert.alert("Sistem Hatası", "Dosya işlenirken sorun oluştu.");
+    }
+  };
+
   const formatCurrency = (amount) =>
     new Intl.NumberFormat("tr-TR", {
       style: "currency",
@@ -287,12 +555,34 @@ export default function ListScreen({ navigation }) {
         <Text style={styles.headerTitle}>İşlem Kayıtları</Text>
       </View>
 
-      {/* FİLTRE KARTI (Yıl Combobox ve Ay Seçici) */}
+      {currentUser?.role === "admin" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            style={styles.exportBtn}
+            onPress={handleExportExcel}
+          >
+            <Text style={styles.actionBtnText}>Dışa Aktar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.templateBtn}
+            onPress={handleDownloadTemplate}
+          >
+            <Text style={styles.actionBtnText}>Şablon</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.importBtn}
+            onPress={handleImportExcel}
+          >
+            <Text style={[styles.actionBtnText, { color: "#475569" }]}>
+              Yükle
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={styles.filterCard}>
         <View style={styles.filterRow}>
           <Calendar size={20} color="#64748b" />
-
-          {/* Yıl Combobox Butonu */}
           <TouchableOpacity
             onPress={() => setIsYearModalOpen(true)}
             style={styles.yearDropdown}
@@ -301,8 +591,6 @@ export default function ListScreen({ navigation }) {
             <ChevronDown size={16} color="#64748b" />
           </TouchableOpacity>
         </View>
-
-        {/* Aylar Scroll */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -330,7 +618,6 @@ export default function ListScreen({ navigation }) {
         </ScrollView>
       </View>
 
-      {/* GEÇEN AYDAN AKTAR BUTONU */}
       {canCopyFromPreviousMonth && currentUser?.role === "admin" && (
         <TouchableOpacity
           style={styles.copyButton}
@@ -348,7 +635,6 @@ export default function ListScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* LİSTE */}
       <ScrollView
         contentContainerStyle={styles.listContainer}
         showsVerticalScrollIndicator={false}
@@ -439,14 +725,12 @@ export default function ListScreen({ navigation }) {
         )}
       </ScrollView>
 
-      {/* FAB: YENİ KAYIT EKLE BUTONU (Sağ Alt Köşe) */}
       {currentUser?.role === "admin" && (
         <TouchableOpacity style={styles.fab} onPress={() => openForm()}>
           <Plus size={28} color="#ffffff" />
         </TouchableOpacity>
       )}
 
-      {/* MODAL: YIL COMBOBOX */}
       <Modal visible={isYearModalOpen} transparent={true} animationType="fade">
         <TouchableOpacity
           style={styles.modalOverlay}
@@ -482,10 +766,17 @@ export default function ListScreen({ navigation }) {
         </TouchableOpacity>
       </Modal>
 
-      {/* MODAL: YENİ KAYIT / DÜZENLE FORM */}
-      <Modal visible={isFormOpen} transparent={true} animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.formModalContent}>
+      <Modal visible={isFormOpen} transparent={true} animationType="fade">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalOverlay}
+        >
+          <View
+            style={[
+              styles.formModalContent,
+              { maxHeight: Platform.OS === "ios" ? "90%" : "95%" },
+            ]}
+          >
             <View style={styles.modalHeaderRow}>
               <Text style={styles.modalTitle}>
                 {formData.id ? "Kaydı Düzenle" : "Yeni Kayıt"}
@@ -500,7 +791,8 @@ export default function ListScreen({ navigation }) {
 
             <ScrollView
               showsVerticalScrollIndicator={false}
-              style={{ maxHeight: "85%" }}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 20 }} // EKLENDİ: Klavye açıldığında en alttaki input rahat görünsün diye boşluk
             >
               <View style={styles.typeSelector}>
                 <TouchableOpacity
@@ -592,22 +884,247 @@ export default function ListScreen({ navigation }) {
                 })}
               </View>
 
-              <Text style={styles.inputLabel}>Tarih (YYYY-AA-GG)</Text>
-              <TextInput
+              <Text style={styles.inputLabel}>Tarih</Text>
+              <TouchableOpacity
                 style={styles.input}
-                value={formData.date}
-                onChangeText={(t) => setFormData({ ...formData, date: t })}
-                placeholder="2026-06-15"
-                placeholderTextColor="#94a3b8"
-                maxLength={10}
-              />
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Text
+                  style={{ color: "#1e293b", fontSize: 16, fontWeight: "bold" }}
+                >
+                  {formData.date}
+                </Text>
+              </TouchableOpacity>
+
+              {/* YENİ ÖZELLEŞTİRİLMİŞ DİNAMİK TEKERLEK SEÇİCİ */}
+              {showDatePicker && (
+                <View
+                  style={{
+                    backgroundColor: "#f8fafc",
+                    borderRadius: 16,
+                    padding: 8,
+                    marginBottom: 16,
+                    borderWidth: 1,
+                    borderColor: "#e2e8f0",
+                  }}
+                >
+                  {/* Gün, Ay, Yıl başlık satırı */}
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-around",
+                      paddingVertical: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "bold",
+                        color: "#64748b",
+                      }}
+                    >
+                      GÜN
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "bold",
+                        color: "#64748b",
+                      }}
+                    >
+                      AY
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "bold",
+                        color: "#64748b",
+                      }}
+                    >
+                      YIL
+                    </Text>
+                  </View>
+
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    {/* 1. SÜTUN: GÜN SEÇİCİ */}
+                    <Picker
+                      selectedValue={
+                        formData.date ? formData.date.split(".")[0] : "01"
+                      }
+                      style={{ flex: 1 }}
+                      itemStyle={{
+                        fontSize: 16,
+                        color: "#1e293b",
+                        fontWeight: "bold",
+                      }}
+                      onValueChange={(itemValue) => {
+                        const [_, currentM, currentY] =
+                          formData.date.split(".");
+                        setFormData({
+                          ...formData,
+                          date: `${itemValue}.${currentM}.${currentY}`,
+                        });
+                      }}
+                    >
+                      {Array.from(
+                        {
+                          length: new Date(
+                            parseInt(
+                              formData.date
+                                ? formData.date.split(".")[2]
+                                : currentYear,
+                            ),
+                            parseInt(
+                              formData.date
+                                ? formData.date.split(".")[1]
+                                : "01",
+                            ),
+                            0,
+                          ).getDate(),
+                        },
+                        (_, i) => String(i + 1).padStart(2, "0"),
+                      ).map((d) => (
+                        <Picker.Item key={d} label={d} value={d} />
+                      ))}
+                    </Picker>
+
+                    {/* 2. SÜTUN: AY SEÇİCİ */}
+                    <Picker
+                      selectedValue={
+                        formData.date ? formData.date.split(".")[1] : "01"
+                      }
+                      style={{ flex: 1 }}
+                      itemStyle={{
+                        fontSize: 16,
+                        color: "#1e293b",
+                        fontWeight: "bold",
+                      }}
+                      onValueChange={(itemValue) => {
+                        const [currentD, _, currentY] =
+                          formData.date.split(".");
+                        const maxDays = new Date(
+                          parseInt(currentY),
+                          parseInt(itemValue),
+                          0,
+                        ).getDate();
+                        const adjustedDay = Math.min(
+                          parseInt(currentD),
+                          maxDays,
+                        );
+                        const adjustedDayStr = String(adjustedDay).padStart(
+                          2,
+                          "0",
+                        );
+
+                        setFormData({
+                          ...formData,
+                          date: `${adjustedDayStr}.${itemValue}.${currentY}`,
+                        });
+                      }}
+                    >
+                      {MONTHS.map((m) => (
+                        <Picker.Item
+                          key={m.value}
+                          label={m.label}
+                          value={m.value}
+                        />
+                      ))}
+                    </Picker>
+
+                    {/* 3. SÜTUN: YIL SEÇİCİ (Sadece filtrenizdeki yıllar listelenir) */}
+                    <Picker
+                      selectedValue={
+                        formData.date
+                          ? formData.date.split(".")[2]
+                          : String(currentYear)
+                      }
+                      style={{ flex: 1 }}
+                      itemStyle={{
+                        fontSize: 16,
+                        color: "#1e293b",
+                        fontWeight: "bold",
+                      }}
+                      onValueChange={(itemValue) => {
+                        const [currentD, currentM, _] =
+                          formData.date.split(".");
+                        const maxDays = new Date(
+                          parseInt(itemValue),
+                          parseInt(currentM),
+                          0,
+                        ).getDate();
+                        const adjustedDay = Math.min(
+                          parseInt(currentD),
+                          maxDays,
+                        );
+                        const adjustedDayStr = String(adjustedDay).padStart(
+                          2,
+                          "0",
+                        );
+
+                        setFormData({
+                          ...formData,
+                          date: `${adjustedDayStr}.${currentM}.${itemValue}`,
+                        });
+                      }}
+                    >
+                      {YEARS.map((y) => (
+                        <Picker.Item key={y} label={y} value={y} />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  {/* Seçimi Onaylama Butonu */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      const [d, m, y] = formData.date.split(".");
+                      const selectedDateObj = new Date(
+                        parseInt(y),
+                        parseInt(m) - 1,
+                        parseInt(d),
+                      );
+                      if (selectedDateObj > new Date()) {
+                        const today = new Date();
+                        const todayStr = `${String(today.getDate()).padStart(
+                          2,
+                          "0",
+                        )}.${String(today.getMonth() + 1).padStart(
+                          2,
+                          "0",
+                        )}.${today.getFullYear()}`;
+                        setFormData({ ...formData, date: todayStr });
+                        Alert.alert(
+                          "Uyarı",
+                          "Gelecek bir tarihe kayıt giremezsiniz. Tarih bugüne ayarlandı.",
+                        );
+                      }
+                      setShowDatePicker(false);
+                    }}
+                    style={{
+                      backgroundColor: "#e0e7ff",
+                      padding: 12,
+                      borderRadius: 12,
+                      alignItems: "center",
+                      marginTop: 8,
+                    }}
+                  >
+                    <Text style={{ color: "#4f46e5", fontWeight: "bold" }}>
+                      Tarihi Onayla ve Kapat
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               <Text style={styles.inputLabel}>Tutar (₺)</Text>
               <TextInput
                 style={styles.input}
                 value={formData.amount}
-                onChangeText={(t) => setFormData({ ...formData, amount: t })}
-                placeholder="0.00"
+                onChangeText={handleAmountChange}
+                placeholder="Örn: 1.500,50"
                 keyboardType="numeric"
                 placeholderTextColor="#94a3b8"
               />
@@ -623,7 +1140,16 @@ export default function ListScreen({ navigation }) {
                 placeholder="Notunuz..."
                 placeholderTextColor="#94a3b8"
               />
-
+            </ScrollView>
+            {/* DEĞİŞİKLİK BURADA: Kaydet butonu ScrollView dışına çıkarıldı! */}
+            <View
+              style={{
+                paddingTop: 12,
+                borderTopWidth: 1,
+                borderTopColor: "#f1f5f9",
+                marginTop: 8,
+              }}
+            >
               <TouchableOpacity
                 style={styles.submitButton}
                 onPress={handleTransactionSubmit}
@@ -635,9 +1161,9 @@ export default function ListScreen({ navigation }) {
                   <Text style={styles.submitButtonText}>Kaydet</Text>
                 )}
               </TouchableOpacity>
-            </ScrollView>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -656,7 +1182,47 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 24, fontWeight: "900", color: "#1e293b" },
 
-  // Yıl ve Ay Seçici
+  actionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  exportBtn: {
+    flex: 1,
+    backgroundColor: "#10b981",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  templateBtn: {
+    flex: 1,
+    backgroundColor: "#f59e0b",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  importBtn: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+  },
+  actionBtnText: { fontWeight: "bold", color: "#ffffff", fontSize: 13 },
+
   filterCard: {
     backgroundColor: "#ffffff",
     marginHorizontal: 20,
@@ -713,7 +1279,7 @@ const styles = StyleSheet.create({
   },
   copyButtonText: { color: "#ffffff", fontSize: 14, fontWeight: "bold" },
 
-  listContainer: { paddingHorizontal: 20, paddingBottom: 80 }, // FAB için alttan boşluk
+  listContainer: { paddingHorizontal: 20, paddingBottom: 80 },
 
   emptyContainer: {
     alignItems: "center",
@@ -792,7 +1358,6 @@ const styles = StyleSheet.create({
   textGreen: { color: "#16a34a" },
   textRed: { color: "#dc2626" },
 
-  // Yüzen (FAB) Ekle Butonu
   fab: {
     position: "absolute",
     bottom: 20,
@@ -810,16 +1375,14 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
-  // Ortak Modal Stilleri
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(15, 23, 42, 0.6)",
-    justifyContent: "center",
+    justifyContent: "flex-end",
     alignItems: "center",
     padding: 20,
   },
 
-  // Yıl Modal Stilleri
   yearModalContent: {
     backgroundColor: "#ffffff",
     borderRadius: 24,
@@ -854,7 +1417,6 @@ const styles = StyleSheet.create({
   yearModalText: { fontSize: 16, fontWeight: "600", color: "#64748b" },
   yearModalTextActive: { color: "#4f46e5", fontWeight: "900" },
 
-  // Form Modal Stilleri
   formModalContent: {
     backgroundColor: "#ffffff",
     borderRadius: 24,
@@ -865,7 +1427,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 5,
-    maxHeight: "90%",
+    marginBottom: Platform.OS === "ios" ? 20 : 0,
   },
   modalHeaderRow: {
     flexDirection: "row",

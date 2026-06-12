@@ -1,83 +1,77 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useEffect, useState } from "react";
-import { Alert } from "react-native"; // Hata mesajları için ekledik
-import apiClient from "../api/apiClient"; // Az önce oluşturduğumuz dosyayı çektik
+import { Alert } from "react-native";
+import apiClient from "../api/apiClient";
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [userToken, setUserToken] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null); // Kullanıcı bilgilerini tutmak için
 
-  const isLoggedIn = async () => {
-    try {
-      setIsLoading(true);
-      let token = await AsyncStorage.getItem("userToken");
-      let user = await AsyncStorage.getItem("currentUser");
-
-      if (token && user) {
-        setUserToken(token);
-        setCurrentUser(JSON.parse(user));
-      }
-    } catch (e) {
-      console.log(`Token okuma hatası: ${e}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  // Uygulama açılırken cihaz hafızasında kayıtlı oturum var mı kontrol et
   useEffect(() => {
-    isLoggedIn();
+    const checkLoginStatus = async () => {
+      try {
+        const storedUser = await AsyncStorage.getItem("currentUser");
+        if (storedUser) {
+          setCurrentUser(JSON.parse(storedUser));
+        }
+      } catch (error) {
+        console.error("Oturum kontrol hatası:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    checkLoginStatus();
   }, []);
 
-  // GERÇEK API BAĞLANTISI
+  // GERÇEK BACKEND GİRİŞ SİSTEMİ
   const login = async (username, password) => {
-    setIsLoading(true);
     try {
-      // apiClient doğrudan Vercel adresine /api/login isteği atar
       const response = await apiClient.post("/api/login", {
         username: username.trim().toLowerCase(),
-        password: password,
+        password,
       });
 
-      const { token, user } = response.data; // Vercel'den dönen veriler
+      if (response.data && response.data.user) {
+        const sessionUser = {
+          id: response.data.user.id || response.data.user._id,
+          username: response.data.user.username,
+          role: response.data.user.role,
+          backgroundImage: response.data.user.backgroundImage,
+          token: response.data.token,
+        };
 
-      setUserToken(token);
-      setCurrentUser(user);
-
-      await AsyncStorage.setItem("userToken", token);
-      await AsyncStorage.setItem("currentUser", JSON.stringify(user));
+        // Oturumu cihaz hafızasına kaydet ve state'i güncelle
+        await AsyncStorage.setItem("currentUser", JSON.stringify(sessionUser));
+        setCurrentUser(sessionUser);
+      } else {
+        Alert.alert("Giriş Başarısız", "Sunucudan geçersiz veri döndü.");
+      }
     } catch (error) {
-      console.error("Giriş Hatası:", error.response?.data || error.message);
-      Alert.alert(
-        "Hata",
-        "Kullanıcı adı veya şifre yanlış, ya da sunucuya ulaşılamadı.",
-      );
-    } finally {
-      setIsLoading(false);
+      console.error("Giriş API hatası:", error);
+      const serverError =
+        error.response?.data?.error ||
+        "Sunucuya bağlanılamadı. Bilgilerinizi kontrol edin.";
+      Alert.alert("Giriş Başarısız", serverError);
     }
   };
 
+  // ÇIKIŞ İŞLEMİ
   const logout = async () => {
-    setIsLoading(true);
-    setUserToken(null);
-    setCurrentUser(null);
-    await AsyncStorage.removeItem("userToken");
-    await AsyncStorage.removeItem("currentUser");
-    setIsLoading(false);
+    try {
+      await AsyncStorage.removeItem("currentUser");
+      setCurrentUser(null);
+    } catch (error) {
+      console.error("Çıkış hatası:", error);
+    }
   };
 
   return (
     <AuthContext.Provider
-      value={{
-        login,
-        logout,
-        isLoading,
-        userToken,
-        currentUser,
-        setCurrentUser,
-      }}
+      value={{ currentUser, setCurrentUser, login, logout, isLoading }}
     >
       {children}
     </AuthContext.Provider>
